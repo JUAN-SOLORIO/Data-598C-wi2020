@@ -1,0 +1,6 @@
+---
+title: NFL Analytics - Feature Engineering
+author: Juan Solorio
+date: "`r format(Sys.time(),'%d %B, %Y')`"
+output: bookdown::html_document2
+---
