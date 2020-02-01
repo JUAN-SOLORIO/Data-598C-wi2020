@@ -6,17 +6,48 @@ output: bookdown::html_document2
 ---
 
 ```{r, set_work_directory, echo=FALSE}
-
+# setting the working directory
 setwd('C:/Users/Juan Solorio/Desktop/DataScience/Grad School/Classes/Data 598C/Data-598C-wi2020/')
+
+library(tidyverse)
+
+# bring in check_df_nulls function from the 1-Data Cleaning file process
+check_df_nulls <- function(df) {
+  ## Function to check the number of NAs in a df
+  for(i in 1:dim(df)[2])
+  {
+    cat(sprintf('Column %.0f: %30s \t Number of NAs: %.0f \t Percent NA data: %.0f%% \n', i,names(df)[i], length(which(is.na(df[,i]))),100*length(which(is.na(df[,i])))/length(df[,i])))
+    
+  }
+}
 
 ```
 
 ```{r, load_data}
+# loading the data
 load('data_train_cleaned.Rdata')
+# Having a look at the first few rows of the data frame
+head(data_train, n=3)
 
-head(data_train)
+# checking for what ever nulls remain
+check_df_nulls(data_train)
 
 ```
+
+From the above we can see that there are still about 7% of 'OffenseTeam' missing in the df, but we do have all 'DefenseTeam'. This will have to be solved as I would like to check the performance of the offense in games. 
+
+The columns with the most NAs are those related to penalties and play types (Pass/Rush). However, this is nothing more than the fact that the columns only have 'text' records for when there is an occurance of this type of event. So if there was no penalty in the play, there is an NA (no record) for the column. I will leave them as NAs.
+
+We still dealing with time events as 'GameDate','Quarter', 'Minute', 'Second'. However I think it is more important to view the Game as it pertains to the Week of the season. The regular season is broken into 17 weeks (each team plays 16 games and rest one week). It is important to view the week as it will show some seasonality events, such as teams that are in contention to make playoffs, might change the way they play or the plays they run in a game.
+
+Lets look at a bargraph of the number of plays per GameDate and compare how it looks after we have created the Week Feature.
+
+```{r, plays_per_GameDate, fig.cap= "Number of plays run per GameDate"}
+
+barplot(table(data_train[,"GameDate"]), main = 'Number of Plays by GameDate')
+
+```
+As we can see there is some trends were we have large spike and then in between groups of low play counts. This is due to the fact that an NFL Week is composed of 3 game days (Thr, Sun, Mon). Let's create the Week feature from the days in each season.
 
 ```{r, add-Season-week-Func, echo=FALSE}
 add.week.of.season <- function(df_in) {
@@ -71,15 +102,97 @@ data_train_week_added <- add.week.of.season(data_train)
 
 # print the head to confirm we have the added column
 head(data_train_week_added, n = 3)
+
 ```
+```{r, plays_per_week, fig.cap="Number of Plays per Game Week"}
+barplot(table(data_train_week_added[,"Week"]), main = "Plays per Game Week")
+```
+Here now we see figure \@ref(fig:plays_per_week), much less noice. Interesting spike in Week 17, but could be explain by the fact that unlike all other weeks where one team rests, all teams play in Week 17 of the season.
+
+Since one of the important thing in a game is to score (preferably a touchdown), we need plays to gain yards and to decrease our distance from the 'end zone'. Let's create a metric for each of these. First meassure if a play is successful, by checking if Offense 'gained' yards from the play, which can occur by either the play working out, or by a Defense side penalty. As for yards from the end zone, the field has 100 yards in length, so where ever a play starts we can subtract from 100 to check how far we are. 
 
 ```{r, add_playsuccess_yrdstotd}
+# Copy of most current data_train df to add new column
 data_train_playsuccess_add <- data_train_week_added[,]
 
+# added column to describe if play gained yards by checking for trues in the 
+# case that column 'Yards' >0  and that PenaltyTeam equals DefenseTeam
 data_train_playsuccess_add$PlaySuccess <- as.numeric(data_train_playsuccess_add$Yards > 0 | (data_train_playsuccess_add$DefenseTeam == as.character(data_train_playsuccess_add$PenaltyTeam) & !is.na(data_train_playsuccess_add$PenaltyTeam)))
 
+# Copy of most current data_train df to add new column
 data_train_yrstotd_add <- data_train_playsuccess_add[,]
+# Column to count how far play is from touchdown in yards by subtracting the 
+# 'Yards' column from 100
 data_train_yrstotd_add$YarsToTD <- 100 - as.numeric(data_train_yrstotd_add$YardLineFixed)
 
 ```
+
+Now let's work in adding the number of plays are accomplish in a drive. By this we will be able to then tell how long drives teams are able to complete. In theory, the longer the drive the more likely it is we will accomplish a scoring play. 
+
+We'll first create a new column to track when a new drive starts as well as the play ordinal number of the drive (is this the 5th, 8th, 2nd play in the offense possession?). We'll also take the moment to add Yards total by current drive. First we'll create the NewDrive, PlayNumInDrive and YardsInDrive columns and fill them with NAs.
+
+```{r, add_d&p&y_col}
+
+data_train_df <- data_train_yrstotd_add[,]
+
+# Adding columns to df
+data_train_df$NewDrive <- NA
+data_train_df$PlayNumInDrive <- NA
+data_train_df$YardsInDriveOff <- NA
+
+```
+
+Before we continue, lets address the NAs in the OffenseTeam column. From looking through the data table, I noticed that most came from 'TIMEOUT' plays. Lets see if dropping these plays helps with the NAs, as time outs do not matter as much for our purpose right now.
+
+```{r, drop_timeouts}
+# Check that OffenseTeam is NA from TIMEOUT plays
+data_train_df %>% filter(PlayType == 'TIMEOUT') %>% select(GameId,OffenseTeam, DefenseTeam, Down, ToGo, PlayType)
+
+# Dropping the Timeout and NA PlayTypes
+data_train_dropTO <- data_train_df[(data_train_df$PlayType != 'TIMEOUT' & !is.na(data_train_df$PlayType)), ]
+check_df_nulls(data_train_dropTO)
+```
+Here We see that most of our OffenseTeam NAs have been taken care of.
+
+Now let's create a loop that will allow us to get the number of plays in each game and parce through the rows to construct the features for the 3 NA columns created.
+
+```{r, fill_Drive_cols_Func, echo=FALSE}
+fill_DrivesCol <- function(df_in) {
+  games <- unique(df_in$GameId)
+  tempFilldf <- data.frame()
+  for (game in games) {
+    tempgamedf <- df_in[df_in$GameId == game,]
+    tempgamedf$NewDrive <- as.numeric((lag(x=tempgamedf$DefenseTeam, n=1) != tempgamedf$DefenseTeam))
+    teams <- unique(tempgamedf$DefenseTeam)
+    if(is.na(tempgamedf$OffenseTeam)){
+      tempgamedf[tempgamedf$DefenseTeam == teams[1], "OffenseTeam"] <- teams[2]
+      tempgamedf[tempgamedf$DefenseTeam == teams[2], "OffenseTeam"] <- teams[1]
+    }
+    for (play in 1:dim(tempgamedf)[1]) {
+    
+      if(is.na(tempgamedf$NewDrive[play])){
+        next
+      }
+      else if((tempgamedf$NewDrive[play] == 1)){
+        tempgamedf$PlayNumInDrive[play] <- 1
+        tempgamedf$YardsInDriveOff[play] <- 0
+      }
+      else{
+        tempgamedf$PlayNumInDrive[play] <- tempgamedf$PlayNumInDrive[play - 1] + 1
+        tempgamedf$YardsInDriveOff[play] <- tempgamedf$YarsToTD[play - 1] -  tempgamedf$YarsToTD[play]
+      }
+    }
+    tempFilldf <- rbind(tempFilldf, tempgamedf)
+  
+  }
+ return(tempFilldf) 
+}
+```
+
+```{r, fill_drives}
+data_train_drives_df <- suppressMessages(fill_DrivesCol(data_train_dropTO))
+```
+For now I have added 6 features that should help get a better picture of the game plays, but I need to figure out a way to calculate the score of the game, AvgYardsPerDrive through season and through game, AvgPlaysPerGame for Season and for Game. 
+
+
 
