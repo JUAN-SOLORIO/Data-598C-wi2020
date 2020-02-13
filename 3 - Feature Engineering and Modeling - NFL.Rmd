@@ -1,0 +1,67 @@
+---
+title: NFL Analytics - Feature Engineering (2) and Modeling
+author: Juan Solorio
+date: "`r format(Sys.time(),'%d %B, %Y')`"
+output: bookdown::html_document2
+---
+
+
+```{r}
+teamstable <- list( sname= c('ARI', 'ATL', 'BAL', 'BUF', 'CAR', 'CHI', 'CIN', 'CLE',
+                             'DAL', 'DEN', 'DET', 'GB',  'HOU', 'IND', 'JAX', 'KC',
+                             'LAC', 'LA', 'MIA',  'MIN', 'NE', 'NO', 'NYG', 'NYJ', 'OAK',
+                             'PHI', 'PIT', 'SD',  'SF', 'SEA', 'LA', 'TB', 'TEN', 'WAS'),
+                    LongName = c( 'Arizona Cardinals',    'Atlanta Falcons',      'Baltimore Ravens',    
+                                  'Buffalo Bills',        'Carolina Panthers',    'Chicago Bears',       
+                                  'Cincinnati Bengals',   'Cleveland Browns',     'Dallas Cowboys',      
+                                  'Denver Broncos',       'Detroit Lions',        'Green Bay Packers',   
+                                  'Houston Texans',       'Indianapolis Colts',   'Jacksonville Jaguars',
+                                  'Kansas City Chiefs',   'Los Angeles Chargers', 'Los Angeles Rams',    
+                                  'Miami Dolphins',       'Minnesota Vikings',    'New England Patriots',
+                                  'New Orleans Saints',   'New York Giants',      'New York Jets',       
+                                  'Oakland Raiders',      'Philadelphia Eagles',  'Pittsburgh Steelers', 
+                                  'San Diego Chargers',   'San Francisco 49ers',  'Seattle Seahawks',    
+                                  'St. Louis Rams',       'Tampa Bay Buccaneers', 'Tennessee Titans',    
+                                  'Washington Redskins' ))
+
+baseurl <- "https://www.pro-football-reference.com/years/"
+seasontable <- data.frame()
+GameWeek <- c()
+GameDate <- c()
+HomeTeam <- c()
+AwayTeam <- c()
+HomeScore <- c()
+AwayScore <- c()
+Season <- c()
+GameNum <- c()
+HTSName <- c()
+ATSName <- c()
+for (year in c(2014:2018)) {
+  for(week in c(1:17)){
+    url <- paste(baseurl,year,'/week_',week,'.htm', sep = '')
+    dataraw <- url %>%
+      html() %>%
+      html_nodes(xpath = '//table[@class="teams"]') %>%
+      html_table()
+    for (game in 1:length(dataraw)) {
+      Season <- c(Season, year)
+      GameWeek <- c(GameWeek, week)
+      GameNum <- c(GameNum, game)
+      GameDate <- c(GameDate, dataraw[[game]][[1]][[1]])
+      HomeTeam <- c(HomeTeam, dataraw[[game]][[1]][[3]])
+      AwayTeam <- c(AwayTeam, dataraw[[game]][[1]][[2]])
+      HomeScore <- c(HomeScore, dataraw[[game]][[2]][[3]])
+      AwayScore <- c(AwayScore, dataraw[[game]][[2]][[2]])
+      HTSName <- c(HTSName, teamstable$sname[teamstable$LongName == dataraw[[game]][[1]][[3]]])
+      ATSName <- c(ATSName, teamstable$sname[teamstable$LongName == dataraw[[game]][[1]][[2]]])
+    }
+    seasontable <- data.frame(Season,GameDate, GameNum, GameWeek,AwayTeam, HomeTeam, ATSName, HTSName, AwayScore, HomeScore)
+  }
+}
+
+seasontable$GameDate <- as.Date(as.character(seasontable$GameDate), format = "%b %d, %Y")
+seasontable$matchid1 <- paste(seasontable$GameDate,seasontable$ATSName, sep = '')
+seasontable$matchid2 <- paste(seasontable$GameDate,seasontable$HTSName, sep = '')
+
+
+```

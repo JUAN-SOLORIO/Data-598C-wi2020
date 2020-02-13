@@ -104,6 +104,7 @@ data_train_week_added <- add.week.of.season(data_train)
 head(data_train_week_added, n = 3)
 
 ```
+
 ```{r, plays_per_week, fig.cap="Number of Plays per Game Week"}
 barplot(table(data_train_week_added[,"Week"]), main = "Plays per Game Week")
 ```
@@ -125,6 +126,12 @@ data_train_yrstotd_add <- data_train_playsuccess_add[,]
 # 'Yards' column from 100
 data_train_yrstotd_add$YarsToTD <- 100 - as.numeric(data_train_yrstotd_add$YardLineFixed)
 
+# Adding columns for field goal and extra point success
+data_train_yrstotd_add$IsFieldGoalGood <- as.numeric(grepl('FIELD GOAL IS GOOD',data_train_yrstotd_add$Description, fixed = TRUE))
+
+data_train_yrstotd_add$IsExtraPointGood <- as.numeric(grepl('EXTRA POINT IS GOOD',data_train_yrstotd_add$Description, fixed = TRUE))
+
+data_train_yrstotd_add$matchid <- paste(data_train_yrstotd_add$GameDate, data_train_yrstotd_add$DefenseTeam, sep = '')
 ```
 
 Now let's work in adding the number of plays are accomplish in a drive. By this we will be able to then tell how long drives teams are able to complete. In theory, the longer the drive the more likely it is we will accomplish a scoring play. 
@@ -189,10 +196,13 @@ fill_DrivesCol <- function(df_in) {
 }
 ```
 
-```{r, fill_drives}
+```{r, fill_drives,warning=FALSE}
 data_train_drives_df <- suppressMessages(fill_DrivesCol(data_train_dropTO))
 ```
 For now I have added 6 features that should help get a better picture of the game plays, but I need to figure out a way to calculate the score of the game, AvgYardsPerDrive through season and through game, AvgPlaysPerGame for Season and for Game. 
 
+```{r, save-data}
+save(data_train_drives_df, file = "data_train_FeatEng.RData")
+```
 
 
