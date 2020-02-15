@@ -5,8 +5,32 @@ date: "`r format(Sys.time(),'%d %B, %Y')`"
 output: bookdown::html_document2
 ---
 
+```{r, set-wd,  echo=FALSE}
+# setting the working directory
+setwd('C:/Users/Juan Solorio/Desktop/DataScience/Grad School/Classes/Data 598C/Data-598C-wi2020/')
+```
 
-```{r}
+```{r, library-data-loads, message=FALSE}
+# libraries used
+library(tidyverse)
+library(rvest)
+library(survival)
+library(survminer)
+library(caTools)
+
+```
+
+
+```{r, load-check-dataload}
+# data loaded from file 2 - Feature Engineering process
+load( "data_train_FeatEng.RData")
+
+# cheching data loaded
+head(data_train_drives_df)
+```
+
+```{r, webscrapping-seasonteamstable, warning=FALSE}
+# team list connecting short name to long name of teams
 teamstable <- list( sname= c('ARI', 'ATL', 'BAL', 'BUF', 'CAR', 'CHI', 'CIN', 'CLE',
                              'DAL', 'DEN', 'DET', 'GB',  'HOU', 'IND', 'JAX', 'KC',
                              'LAC', 'LA', 'MIA',  'MIN', 'NE', 'NO', 'NYG', 'NYJ', 'OAK',
@@ -23,7 +47,7 @@ teamstable <- list( sname= c('ARI', 'ATL', 'BAL', 'BUF', 'CAR', 'CHI', 'CIN', 'C
                                   'San Diego Chargers',   'San Francisco 49ers',  'Seattle Seahawks',    
                                   'St. Louis Rams',       'Tampa Bay Buccaneers', 'Tennessee Titans',    
                                   'Washington Redskins' ))
-
+# setting up the needed requirements to scrap pro-football website to obtain the season info for each game [the season, the week, home vs away team, scores] using the library rvest
 baseurl <- "https://www.pro-football-reference.com/years/"
 seasontable <- data.frame()
 GameWeek <- c()
@@ -62,6 +86,96 @@ for (year in c(2014:2018)) {
 seasontable$GameDate <- as.Date(as.character(seasontable$GameDate), format = "%b %d, %Y")
 seasontable$matchid1 <- paste(seasontable$GameDate,seasontable$ATSName, sep = '')
 seasontable$matchid2 <- paste(seasontable$GameDate,seasontable$HTSName, sep = '')
+seasontable$AwayScore <- as.numeric(seasontable$AwayScore)
+seasontable$HomeScore <- as.numeric(seasontable$HomeScore)
 
+head(seasontable)
+str(seasontable)
+
+```
+
+```{r, add-season-info-main}
+
+# looping through the main dataframe to add season table info to the games
+add_season_info_fx <- function(df_in1, df_in2) {
+  df1 <- df_in1[,]
+  dfseasons <- df_in2[,]
+  tempfilldf <- data.frame()
+  
+  matchids <- unique(dfseasons$matchid1)
+  for (match in matchids) {
+    dfseasons1 <- dfseasons[dfseasons$matchid1 == match,c('HTSName', 'AwayScore', 'HomeScore')]
+    tempgameid <- unique(df1[df1$matchid == match,]$GameId)
+    
+    df2 <- df1[df1$GameId == tempgameid,]
+    df2$HomeTeam <- rep(dfseasons1$HTSName,nrow(df2))
+    df2$AwayTeamScore <- rep(dfseasons1$AwayScore,nrow(df2))
+    df2$HomeTeamScore <- rep(dfseasons1$HomeScore,nrow(df2))
+    
+    tempfilldf <- rbind(tempfilldf, df2)
+    
+  }
+  
+  return(tempfilldf)
+}
+
+
+```
+
+```{r}
+data_train1 <- data_train_drives_df[,]
+tempdf <- add_season_info_fx(data_train1, seasontable)
+
+data_train_add_win <- tempdf[,]
+
+data_train_add_win$IsOffHomeTeam <- (ifelse((data_train_add_win$OffenseTeam == data_train_add_win$HomeTeam),'Home','Away'))
+
+data_train_add_win$GameVictory <- (ifelse(data_train_add_win$HomeTeamScore >= data_train_add_win$AwayTeamScore, 'Home', 'Away'))
+
+data_train_add_win$OffDriveOver <- as.numeric(lead(data_train_add_win$NewDrive == 1, n = 1))
+
+data_train_model <- data_train_add_win[,]
+
+data_train.notna <- data_train_model[!is.na(data_train_model$PlayNumInDrive),]
+
+split <- sample.split(data_train.notna, SplitRatio = .8)
+
+data.training <- subset(data_train.notna, split == "TRUE")
+data.testing <- subset(data_train.notna, split == "FALSE")
+```
+
+
+```{r, models-survival}
+
+drive.surival <- data.training[,c('Quarter','Minute','Week','HomeTeam','OffenseTeam','DefenseTeam','PlayNumInDrive','OffDriveOver','IsOffHomeTeam', 'YardsInDriveOff', 'IsPass', 'IsRush')]
+
+general.drive.survival <- data.training[,c('Quarter','Minute','Week','PlayNumInDrive','OffDriveOver','IsOffHomeTeam', 'YardsInDriveOff', 'IsPass', 'IsRush')]
+
+KMsurv.base <- survfit(Surv(PlayNumInDrive, OffDriveOver)~1, data = general.drive.survival)
+
+KMsurv.homefield <- survfit(Surv(PlayNumInDrive, OffDriveOver)~IsOffHomeTeam, data = general.drive.survival)
+
+coxsurv.all <- coxph(Surv(PlayNumInDrive, OffDriveOver) ~ . , method="breslow", data = general.drive.survival)
+
+coxsurv.general <- coxph(Surv(PlayNumInDrive, OffDriveOver) ~ 1 , method="breslow", data = general.drive.survival)
+
+ggsurvplot(KMsurv.base, data = general.drive.survival)
+
+ggsurvplot(KMsurv.homefield, data = general.drive.survival)
+
+ggforest(coxsurv.all, data = data.testing)
+
+
+```
+
+```{r, models-LogistReg}
+general.drive.logreg <- data.training[,c('Quarter','Minute','Week','HomeTeam','PlayNumInDrive','PlaySuccess','IsOffHomeTeam', 'YardsInDriveOff', 'IsPass', 'IsRush')]
+logReg.model.base <- glm(PlaySuccess ~ IsPass+Quarter+IsRush,data =general.drive.logreg , family = 'binomial')
+
+summary(logReg.model.base)
+
+logreg.predict1 <- predict(logReg.model.base, data.testing, type = 'response')
+
+table(ActualValue = data.testing$PlaySuccess, PredictedValue = logreg.predict1 > 0.5)
 
 ```
