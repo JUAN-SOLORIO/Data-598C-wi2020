@@ -17,6 +17,7 @@ library(rvest)
 library(survival)
 library(survminer)
 library(caTools)
+library(ROCR)
 
 ```
 
@@ -165,6 +166,7 @@ ggsurvplot(KMsurv.homefield, data = general.drive.survival)
 
 ggforest(coxsurv.all, data = data.testing)
 
+# Still figuring out the best way to test how well my survival model has performed
 
 ```
 
@@ -174,8 +176,22 @@ logReg.model.base <- glm(PlaySuccess ~ IsPass+Quarter+IsRush,data =general.drive
 
 summary(logReg.model.base)
 
-logreg.predict1 <- predict(logReg.model.base, data.testing, type = 'response')
+logreg.predict.t1 <- predict(logReg.model.base, data.testing, type = 'response')
 
-table(ActualValue = data.testing$PlaySuccess, PredictedValue = logreg.predict1 > 0.5)
+conf.matrix1 <- table(ActualValue = data.testing$PlaySuccess, PredictedValue = logreg.predict.t1 > 0.5)
+conf.matrix1
+
+logreg.predict.tr <-  predict(logReg.model.base, data.training, type = 'response')
+
+ROCPred <- prediction(logreg.predict.tr, data.training$PlaySuccess)
+ROCPerf <- performance(ROCPred,"tpr", "fpr")
+
+plot(ROCPerf, colorize=TRUE, print.cutoffs.at=seq(0.2, by = 0.2))
+
+logreg.predict.t2 <- predict(logReg.model.base, data.testing, type = 'response')
+conf.matrix2 <- table(ActualValue = data.testing$PlaySuccess, PredictedValue = logreg.predict.t2 > 0.3)
+conf.matrix2
+
+print(rbind(c("Accuracy t1 :", "Accuracy t2,"),c((sum(conf.matrix1[1,1],conf.matrix1[2,2])/sum(conf.matrix1)),(sum(conf.matrix2[1,1],conf.matrix2[2,2])/sum(conf.matrix2)))))
 
 ```
