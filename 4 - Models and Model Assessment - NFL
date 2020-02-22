@@ -1,0 +1,31 @@
+---
+title: NFL Analytics - Feature Engineering (2) and Modeling
+author: Juan Solorio
+date: "`r format(Sys.time(),'%d %B, %Y')`"
+output: bookdown::html_document2
+---
+
+```{r, set-wd,  echo=FALSE}
+# setting the working directory
+setwd('C:/Users/Juan Solorio/Desktop/DataScience/Grad School/Classes/Data 598C/Data-598C-wi2020/')
+```
+
+```{r, library-data-loads, message=FALSE}
+# libraries used
+library(tidyverse)
+library(rvest)
+library(survival)
+library(survminer)
+library(caTools)
+library(ROCR)
+
+```
+
+
+```{r, load-check-dataload}
+# data loaded from file 2 - Feature Engineering process
+load( "data_train_FeatEng.RData")
+
+# cheching data loaded
+head(data_train_drives_df)
+```

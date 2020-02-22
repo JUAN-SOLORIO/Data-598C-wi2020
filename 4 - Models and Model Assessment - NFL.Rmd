@@ -1,0 +1,143 @@
+---
+title: NFL Analytics - Models and Model Assessment
+author: Juan Solorio
+date: "`r format(Sys.time(),'%d %B, %Y')`"
+output: bookdown::html_document2
+---
+
+```{r, set-wd,  echo=FALSE}
+# setting the working directory
+setwd('C:/Users/Juan Solorio/Desktop/DataScience/Grad School/Classes/Data 598C/Data-598C-wi2020/')
+```
+
+```{r, library-data-loads, message=FALSE}
+# libraries used
+library(tidyverse)
+library(rvest)
+library(survival)
+library(survminer)
+library(caTools)
+library(ROCR)
+library(ggfortify)
+
+```
+## Data Load and train/test split for prepared data
+
+### Premise
+Coach Carroll comes to us and is curious about the general state of affairs in the NFL. He is specifically curious as to how long are drives lasting in the NFL over the last few years, as he is big on defense and wanting to stop offensive drives.
+
+So let's load the prepepared data.
+```{r, load-check-dataload}
+# data loaded from file 2 - Feature Engineering process
+load( "data_train_forModels.RData")
+
+split <- sample.split(data_train.notna, SplitRatio = .8)
+
+data.training <- subset(data_train.notna, split == "TRUE")
+data.testing <- subset(data_train.notna, split == "FALSE")
+```
+
+So following along, we will explore a few survival models and logistic regression, to see how drives are affected and if we can predict, how likely is a drive continue depending on the following variables: 'Quarter','Minute','Week','Down','ToGo','PlayNumInDrive','OffDriveOver','IsOffHomeTeam', 'IsPass'.
+
+```{r, models-survival}
+# attributes for possible team specific drives
+totest <- c('Quarter','Minute','Week','Down','ToGo','PlayNumInDrive','OffDriveOver','IsOffHomeTeam', 'IsPass')
+
+# attributes to take into account for the general none specific team (league avg)
+general.drive.test <- data.testing[,totest]
+general.drive.train <- data.training[,totest]
+
+# KM is most common survival model so we are just checking how this holds for the general premise.
+KMsurv.base <- survfit(Surv(PlayNumInDrive, OffDriveOver)~1, data = general.drive.train)
+
+ggsurvplot(KMsurv.base, data = general.drive.test)
+
+# Checking if Home field has any effect on Offensive drives, given the 12th man in seattle might be something to consider for coach. So for the general team
+KMsurv.homefield <- survfit(Surv(PlayNumInDrive, OffDriveOver)~IsOffHomeTeam, data = general.drive.train)
+
+KMsurv.homefield <- survfit(Surv(PlayNumInDrive, OffDriveOver)~IsOffHomeTeam, data = general.drive.train)
+
+ggsurvplot(KMsurv.homefield, data = general.drive.test, conf.int = TRUE, legend.labs=c("Away Team", "Home Team"),
+          linetype = "strata", # Change line type by groups
+          surv.median.line = "hv", # Specify median survival,
+           ggtheme = theme_minimal())
+# Both look pretty close and deviate for longer plays, with better survival for away team.
+
+
+# for a more complex survival model we'll use Cox
+coxsurv.all <- coxph(Surv(PlayNumInDrive, OffDriveOver) ~ . , method="breslow", data = general.drive.train)
+
+CoxSurvivalProb <- predict(coxsurv.all,general.drive.test,type = 'survival')
+
+ggsurvplot(surv_fit(coxsurv.all, data = general.drive.test), conf.int = TRUE,
+          linetype = "strata", # Change line type by groups
+          surv.median.line = "hv", # Specify median survival,
+           ggtheme = theme_minimal())
+# The more complex model gives us better chances of survival for drives
+
+
+CoxFit <- c() 
+for(i in c(1:100)){
+  CoxFit[i] <- mean((1-as.numeric(predict(coxsurv.all,general.drive.test, type = 'survival') > i/100)) == general.drive.test$OffDriveOver,na.rm = T)
+  }
+
+# if we were looking for 80% accuracy, we predicted about 89% of the data correctly in our test data
+mean((1-as.numeric(predict(coxsurv.all,general.drive.test, type = 'survival') > .8)) == general.drive.test$OffDriveOver,na.rm = T)
+
+dummydata <- with(general.drive.test,
+                  data.frame(Quarter=as.factor(c(4)),Minute=rep(2,1),Week=rep(8,1),Down =rep(as.factor(1),1),ToGo=rep(10,1),IsOffHomeTeam=rep('Home',1), IsPass=rep(as.factor(1),1)))
+# transforming coxfit into an object to graph with ggsurvplot
+cox_fit <- survfit(coxsurv.all)
+
+data.test.df <- data.testing[,]
+data.test.df$CoxSurvProb <- CoxSurvivalProb
+
+```
+
+```{r, models-LogistReg}
+# creating the logistic regression model for t
+logRegmodel <- glm(OffDriveOver ~ ., data = general.drive.train, family = 'binomial')
+
+summary(logRegmodel)
+
+# From the summary we see that the fifth quarter or overtime has small P value, and that home field has the least of the p values for the variables that show significance
+
+# lets predict the probability of a drive to continue, we need to subtract from 1 as this is showing low values for a drive being equal to 1 signalling drive ending
+logreg.predict.t1 <- 1-predict(logRegmodel, general.drive.test, type = 'response')
+
+logProb <- c()
+for(i in c(1:100)){
+  logProb[i] <- mean((as.numeric(predict(logRegmodel,general.drive.test, type = 'response') > i/100)) == general.drive.test$OffDriveOver,na.rm = T)
+}
+
+mean((as.numeric(predict(logRegmodel,general.drive.test, type = 'response') > .8)) == general.drive.test$OffDriveOver,na.rm = T)
+
+data.test.df$LogRedProb <- logreg.predict.t1
+
+```
+
+So it seem that if we were to take .8 as the cutoff for determening if a Drive is still 'alive', the coxfit model seems to have a better capture ratio when compared to the real values in the test dataset. 
+
+Now let's look at how drive length relates to scoring touchdowns.
+```{r, benefit}
+# 
+plot(hist(data.training$PlayNumInDrive[data.training$IsTouchdown == 1]), main = 'Touchdown Scoring Drives', xlab = 'Number of plays in drive')
+#abline(v = mean(data.training$PlayNumInDrive[data.training$IsTouchdown == 1]))
+
+# we see that about 49% of the drives that score a touchdown are over the mean of 7 plays in a drive
+mean(data.training$PlayNumInDrive[data.training$IsTouchdown == 1] > mean(data.training$PlayNumInDrive[data.training$IsTouchdown == 1]))
+
+```
+
+Let's check the number of yards that a play gains. From that we can see how many yards per successful prediction we gain or loose if we are wrong.
+```{r, utility}
+avg.yards.per.successfulplay <- mean(data.test.df$YardsInDriveOff[data.test.df$PlaySuccess == 0])
+
+avg.yards.CoxSurv <- mean(data.test.df$YardsInDriveOff[data.test.df$CoxSurvProb > .8], na.rm = T)
+avg.yards.CoxSurv
+
+avg.yards.LogReg <- mean(data.test.df$YardsInDriveOff[data.test.df$LogRedProb > .8], na.rm = T)
+avg.yards.LogReg
+```
+
+So it seems that on avg, for the plays that we correctly predicted we double the amount of yards gain with the Cox model than with LogReg. Granted, it is only about .13 of a yard vs .002 of a yard, but Football is a game of inches, and .16 of a yard is a little over 1 inch, so success haha.

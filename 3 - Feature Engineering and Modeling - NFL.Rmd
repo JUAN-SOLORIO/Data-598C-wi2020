@@ -139,6 +139,9 @@ data_train_model <- data_train_add_win[,]
 
 data_train.notna <- data_train_model[!is.na(data_train_model$PlayNumInDrive),]
 
+
+save(data_train.notna, file = "data_train_forModels.RData")
+
 split <- sample.split(data_train.notna, SplitRatio = .8)
 
 data.training <- subset(data_train.notna, split == "TRUE")
@@ -194,4 +197,8 @@ conf.matrix2
 
 print(rbind(c("Accuracy t1 :", "Accuracy t2,"),c((sum(conf.matrix1[1,1],conf.matrix1[2,2])/sum(conf.matrix1)),(sum(conf.matrix2[1,1],conf.matrix2[2,2])/sum(conf.matrix2)))))
 
+```
+
+```{r, save-data}
+save(data_train_drives_df, file = "data_train_FeatEng.RData")
 ```
