@@ -19,6 +19,7 @@ library(survminer)
 library(caTools)
 library(ROCR)
 library(ggfortify)
+library(ggExtra)
 
 ```
 ## Data Load and train/test split for prepared data
@@ -30,6 +31,8 @@ So let's load the prepepared data.
 ```{r, load-check-dataload}
 # data loaded from file 2 - Feature Engineering process
 load( "data_train_forModels.RData")
+
+data_train.notna$YardsGain <- lead(data_train.notna$YardsInDriveOff, n=1)
 
 split <- sample.split(data_train.notna, SplitRatio = .8)
 
@@ -85,7 +88,7 @@ for(i in c(1:100)){
 mean((1-as.numeric(predict(coxsurv.all,general.drive.test, type = 'survival') > .8)) == general.drive.test$OffDriveOver,na.rm = T)
 
 dummydata <- with(general.drive.test,
-                  data.frame(Quarter=as.factor(c(4)),Minute=rep(2,1),Week=rep(8,1),Down =rep(as.factor(1),1),ToGo=rep(10,1),IsOffHomeTeam=rep('Home',1), IsPass=rep(as.factor(1),1)))
+                  data.frame(Quarter=as.factor(c(4)),Minute=rep(1,1),Week=rep(15,1),Down =rep(as.factor(2),1),ToGo=rep(1,1),IsOffHomeTeam=rep('Home',1), IsPass=rep(as.factor(0),1), PlayNumInDrive=9))
 # transforming coxfit into an object to graph with ggsurvplot
 cox_fit <- survfit(coxsurv.all)
 
@@ -107,12 +110,12 @@ logreg.predict.t1 <- 1-predict(logRegmodel, general.drive.test, type = 'response
 
 logProb <- c()
 for(i in c(1:100)){
-  logProb[i] <- mean((as.numeric(predict(logRegmodel,general.drive.test, type = 'response') > i/100)) == general.drive.test$OffDriveOver,na.rm = T)
+  logProb[i] <- mean((as.numeric(1 - predict(logRegmodel,general.drive.test, type = 'response') > i/100)) == general.drive.test$OffDriveOver,na.rm = T)
 }
 
 mean((as.numeric(predict(logRegmodel,general.drive.test, type = 'response') > .8)) == general.drive.test$OffDriveOver,na.rm = T)
 
-data.test.df$LogRedProb <- logreg.predict.t1
+data.test.df$LogRegProb <- logreg.predict.t1
 
 ```
 
@@ -131,13 +134,22 @@ mean(data.training$PlayNumInDrive[data.training$IsTouchdown == 1] > mean(data.tr
 
 Let's check the number of yards that a play gains. From that we can see how many yards per successful prediction we gain or loose if we are wrong.
 ```{r, utility}
-avg.yards.per.successfulplay <- mean(data.test.df$YardsInDriveOff[data.test.df$PlaySuccess == 0])
 
-avg.yards.CoxSurv <- mean(data.test.df$YardsInDriveOff[data.test.df$CoxSurvProb > .8], na.rm = T)
+avg.yards.per.successfulplay <- mean(data.test.df$YardsGain[data.test.df$OffDriveOver == 0], na.rm = T)
+
+avg.yards.CoxSurv <- mean(data.test.df$YardsGain[data.test.df$CoxSurvProb > .8], na.rm = T)
 avg.yards.CoxSurv
 
-avg.yards.LogReg <- mean(data.test.df$YardsInDriveOff[data.test.df$LogRedProb > .8], na.rm = T)
+avg.yards.LogReg <- mean(data.test.df$YardsGain[data.test.df$LogRegProb > .8], na.rm = T)
 avg.yards.LogReg
 ```
 
 So it seems that on avg, for the plays that we correctly predicted we double the amount of yards gain with the Cox model than with LogReg. Granted, it is only about .13 of a yard vs .002 of a yard, but Football is a game of inches, and .16 of a yard is a little over 1 inch, so success haha.
+
+```{r, figures}
+p <- data.test.df %>%
+  ggplot(aes(x = LogRegProb, y = CoxSurvProb, col = factor(OffDriveOver), alpha = 0.5))
+p + geom_point()
+ggMarginal(p,type = 'density')
+
+```

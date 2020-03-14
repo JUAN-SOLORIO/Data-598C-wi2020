@@ -1,0 +1,162 @@
+---
+title: "Survive and Succeed - Analysis of NFL Drives"
+author: "Juan Solorio"
+date: "3/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(rvest)
+library(survival)
+library(survminer)
+library(caTools)
+library(ROCR)
+library(ggfortify)
+```
+
+## Abstract
+
+In the current world of professional sports, we've seen the rise of big data where teams have utilize analytics to improve not only as business organizations, but also and more interestingly as athletic entities. The rise of money ball in baseball, the current 3-point era in basketball, and even the NFL searching ways to improve player safety through the use of data. This project aimed to use a logistic regression model and a survival analysis model to help improve team performance during NFL in game drives. Ultimately, both models were able to perform at above the decired 80% accuracy and confidence of play success, and were recommended as learning and preparation tools for the SeaHawks organization.
+
+## Introduction and Problem Statement
+
+The main concerned at hand from Coach Carrol and the Seahawks organization was the need to improve in any possible aspect of the game in order to conquer their goals of a second Super Bowl. From the free and open available data we were able to gather game play-by-play data from “http://nflsavant.com/about.php” and from "https://www.pro-football-reference.com/years/", which provided data from 2013 to 2019 about the 'Play-by-Play' description of each NFL game from Week 1 to the Super Bowl. From data exploration, the Seahawks prime concerned was translated into the question: **How can length of drives help improve a team’s winning chances? Can we use a logistic regression or survival model to predict the continuation of a play?**
+
+## Data, Cleaning, and Processing
+
+The NFL data was obtained from two sources, “http://nflsavant.com/about.php” and from "https://www.pro-football-reference.com/years/". This was due to after some EDA, there was a possible need to obtain final game scores and descriptors of which was the Home/Away team. This data seems to not be included in the nflsavant.com data files, and as a result pro-football-reference.com was scrapped for this data. 
+
+The first data source (nflsavant.com), provided play-by-play (pbp) data in the form of csv files for the 2013-2019 regular seasons, which included a well defined data frame structure identified by GameID. From the dimensions of the data frames, all had 45 columns and most are around 40k rows. The only exception was the 2013 season, which only had about 15k rows, as a result it was omitted to allow for a better speed up of the rendering of the data cleaning. The data frames for pbp while vast in data samples for each individual play in games, came with a large amount of missing data and other problems that needed to be addressed, as can be seen in figure 1.
+
+```{r, checknulls, echo=FALSE, cache=TRUE}
+S2014 <- read.csv('pbp-2014.csv')
+S2015 <- read.csv('pbp-2015.csv')
+S2016 <- read.csv('pbp-2016.csv')
+S2017 <- read.csv('pbp-2017.csv')
+S2018 <- read.csv('pbp-2018.csv')
+S2019 <- read.csv('pbp-2019.csv')
+
+data_train <- rbind(S2014, S2015, S2016, S2017, S2018, S2019)
+data_train[data_train == ''] <- NA
+
+check_df_nulls <- function(df) {
+  ## Function to check the number of NAs in a df
+  for(i in 1:dim(df)[2])
+  {
+    cat(sprintf('Column %.0f: %30s \t Number of NAs: %.0f \t Percent NA data: %.0f%% \n', i,names(df)[i], length(which(is.na(df[,i]))),100*length(which(is.na(df[,i])))/length(df[,i])))
+    
+  }
+}
+
+# Checking the number of NAs in each df
+check_df_nulls(data_train)
+```
+
+From the data there were a few columns without actual values or names labeled as ‘X’, ‘X.1’, ‘X,2’, ‘X.3’, ‘Challenger’. There were also three columns with a large amount of data missing (>70%), that were drop these since they were not going to contribute to the actual project and it would be hard to figure out the actual data entry from the other columns. The column ‘OffenseTeam’ is one which we might be able to figure out the 7% of unknowns. Each game has a GameId and there are two teams, one on offense and one on defense per each row. I filtered the results for game and then fill in the Offense team missing by checking the team that is on defense for that game. The data frame had a mix between factors and ints as the data types for the columns. Factors would be useful when trying to manipulate categorical data. However, I changed columns such as ‘Description’ to a character since it is text data and ‘GameDate’ to date format. I changed some of the int data columns to factors such as the ‘Quarter’, ‘Minute’, ‘Down’, ‘SeriesFirstDown’, and all columns after ‘Formation’ as they act as boolean describing if something was accomplished in the play.
+
+The columns with the most NAs were those related to penalties and play types (Pass/Rush). However, this is nothing more than the fact that the columns only have ‘text’ records for when there is an occurance of this type of event. So if there was no penalty in the play, there is an NA (no record) for the column, which I dealt with later.
+
+The data frame originally dealt with time events as ‘GameDate’,‘Quarter’, ‘Minute’, ‘Second’, however it is more important to view the Game as it pertains to the Week of the season. The regular season is broken into 17 weeks (each team plays 16 games and rest one week). It is important to view the week as it will show some seasonality events, such as teams that are in contention to make playoffs, might change the way they play or the plays they run in a game. An NFL Week is composed of 3 game days (Thr, Sun, Mon), hence a “Week” feature from the days in each season was created by joining those days.
+
+For our specific research on increasing the chances of winning, one of the important things in a game is to score (preferably a touchdown), we need plays to gain yards and to decrease our distance from the ‘end zone’. Metrics were created to measure if a play was successful, by checking if Offense ‘gained’ yards from the play, which can occur by either the play working out, or by a Defense side penalty. As for yards from the end zone, the field has 100 yards in length, so wherever a play starts was subtracted from 100 to check how far a team needed to travel. 
+
+The next metric of importance we needed was a way to tell how long or how many plays a drive had. In theory, the longer the drive the more likely it is we will accomplish a scoring play, so metrics to track when a new drive starts as well as the play ordinal number of the drive (is this the 5th, 8th, 2nd play in the offense possession?) were created as a way to track “length of drive”. We’ll also take the moment to add Yards total by current drive as another measure of “length”. For this, features such as NewDrive, PlayNumInDrive and YardsInDrive deriving from when Offense and Defense team change in a GameID were created.
+In order to proceed, at this point data from pro-football-reference.com, was scrapped using the ‘rvest’ package. The Season, GameDate, Week, Home/Away Team, Home/Away scores were obtained. From these, features such as which team was victorious were engineered by comparing scores, and a matching ID was developed through the Season/Week/Teams to join with the original nflsavant.com data frame. 
+## Feature Engineering
+
+A few features were developed during the EDA, but the most important ones and ones that were used in the subsequent modeling phase, were the NumPlaysInDrive, PlaySuccess, OffDriveOver, ToGo, YardsToTD, Week, TeamWin, and HomeField. Each of these features come to be as there was a need to detect the needed signals to answer the question of what would lead to and possibly improve team win success. 
+
+NumPlaysInDrive was develop as a counter considering the change in Offensive team in a game, as I needed a way to track “length” of a drive. PlaySuccess signals whether a play was able to obtain positive yard movement, including both actual play or due to a defensive penalty. OffDriveOver signals if the drive has ended by comparing if the current Offense is different from the one in the following play. ToGo and YardsToTD both are counters for tracking yards, the first counting how many more to the next 1st down and the second how many more to a TD. The feature Week was developed by grouping 3 days and then moving on to the next 3 for a given season, allowing for a better understanding of how teams perform in accordance to a season. Finally the TeamWin and HomeField were engineered from the  pro-football-reference.com scrapping, as these already contain labels for Home and Away teams, a matching to whether an offensive drive lead to a team victory or if Home field advantage had an effect were match to the OffenseTeam variable.
+
+## Model Selection
+
+The models chosen to attempt to answer the question of how to improve winning chances for a team, were a Logistic Regression model and a Survival Analysis model. The decision for a Logistic Regression model is because during my data cleaning and preparations, I ended with a few features that would fit well within the capabilities of the model. I had features that encode the type of play that was executed by the offense team (pass, run, no play) as well as the type of these plays (shotgun, run left, run right, run-pass-option…). I had engineered a feature to encoding whether a play was successful or not (gained yards). These would do well in trying to predict the possible outcome of a specific play.
+
+The Survival Analysis model was chosen because I see scoring as the objective of an offensive drive. In football this means reaching the end zone (100 yard mark). I thought it would be interesting to see the likelihood a play has to accomplish this objective through the survival analysis model taking the yard marking as a ‘time’ parameter. Another possibility was to model the duration of an offensive drive using the NumPlaysInDrive feature that accounts for the number of plays that a drive has had (whether scoring or not). These took into consideration homefield advantage, quarter (or time till end), score (loosing/winning differential).
+
+```{r}
+knitr::include_graphics("Process.PNG")
+```
+
+Over all both of the models were chosen because they would provide easy fitting and interpretation with little hyperparameter tuning. My main concern in the process was to provide the Seahawks an easy interpretable and useable program with minimal explanation needed as to what was occurring or for it to fall under a “black-box” category.
+
+## Model Training and Assessment
+
+In order to trim down the over 55 features available in the dataset, I decided to focus down the scope of the project and give a general overview of the “General” NFL drive/Game/team instead of addressing winning just for the Seahawks specifically. This would also allow for me to use a much larger set of data without being restricted to only matches of a specific team. Many of the already provided features were categorical, provided a 1/0 signal if a specific play occurred. This however seemed counterproductive to feed into the model as whether of not a pass was “short pass”, “deep-left”, “right-hook”, or any other would be less intuitive for the general drive if instead we told the model if the play was simply a pass or run play. Moreover, from my knowledge of the game and as a sports fan, I know that time has a big influence in a team’s performance and decision making. Hence features like Week, Quarter, time of game needed to be included. Finally, the last features that I thought would provide some insight to our general team model were the yard measurement and influence of field of play (home field advantage or disadvantage). The final data frame can then be seen below.
+
+```{r, training-df, echo=FALSE}
+load( "data_train_forModels.RData")
+
+split <- sample.split(data_train.notna, SplitRatio = .8)
+
+data.training <- subset(data_train.notna, split == "TRUE")
+data.testing <- subset(data_train.notna, split == "FALSE")
+
+# attributes for possible team specific drives
+totest <- c('Quarter','Minute','Week','Down','ToGo','PlayNumInDrive','OffDriveOver','IsOffHomeTeam', 'IsPass')
+
+# attributes to take into account for the general none specific team (league avg)
+general.drive.test <- data.testing[,totest]
+general.drive.train <- data.training[,totest]
+
+print(head(general.drive.train,n = 3))
+```
+
+For the model process using the package “caTools”, I used the ‘sample.split’ function which allowed me to split the data into a testing and training group under a split-ratio of 80% training and 20% testing. After the split for testing data and training, I fed a subset of the data training into a Cox survival model from the ‘survival’ package and also fed the training set into the binomial generalize linear model function to create weights for the features. The survival model worked under the formula based on the continuation of a drive (OffDriveOver = 0) and how this was affected by the other features. The logistic regression calculated the relation between the feature PlaySuccess and the reminder of the features in the subset.  
+
+## Evaluation and Recommendations
+
+For the model evaluation and recommendation, I decided to consider that the model more than likely would no be able to be used in game during a season. Moreover, I considered that Couch Carroll would only consider the recommendation of the model, if it showed over an 80% accuracy in predicting a play, when given over 80% in the probability of a play succeeding. I was then able to prove to coach that the model could perform under these requirements as shown in figure 3 and figure 4, between the 85% to 93% threshold of confidence. Even after being run through and checked for adjustment through the ROC curve and confusion matrix, the logistic regression model was already performing at its best outcome, seen below.
+
+```{r, models, echo=FALSE}
+
+coxsurv.all <- coxph(Surv(PlayNumInDrive, OffDriveOver) ~ . , method="breslow", data = general.drive.train)
+
+CoxFit <- c() 
+for(i in c(1:100)){
+  CoxFit[i] <- mean((1-as.numeric(predict(coxsurv.all,general.drive.test, type = 'survival') > i/100)) == general.drive.test$OffDriveOver,na.rm = T)
+}
+
+logRegmodel <- glm(OffDriveOver ~ ., data = general.drive.train, family = 'binomial')
+
+logreg.predict.t1 <- 1-predict(logRegmodel, general.drive.test, type = 'response')
+
+logProb <- c()
+for(i in c(1:100)){
+  logProb[i] <- mean((as.numeric(predict(logRegmodel,general.drive.test, type = 'response') > i/100)) == general.drive.test$OffDriveOver,na.rm = T)
+}
+
+conf.matrix1 <- table(ActualValue = data.testing$PlaySuccess, PredictedValue = logreg.predict.t1 > 0.5)
+conf.matrix1
+
+ROCPred <- prediction(logreg.predict.t1, data.testing$PlaySuccess)
+ROCPerf <- performance(ROCPred,"tpr", "fpr")
+
+plot(ROCPerf, colorize=TRUE, print.cutoffs.at=seq(0.2, by = 0.2))
+
+mean80log <- mean((as.numeric(predict(logRegmodel,general.drive.test, type = 'response') > .8)) == general.drive.test$OffDriveOver,na.rm = T)
+
+mean80surv <- mean((1-as.numeric(predict(coxsurv.all,general.drive.test, type = 'survival') > .8)) == general.drive.test$OffDriveOver,na.rm = T)
+
+print(cbind(c("Survival Model Accuracy at 80% : ", "Regression Model Accuracy at 80% : "), c(mean80surv, mean80log)))
+
+```
+```{r, modelfig, out.width="150%"}
+
+knitr::include_graphics("NFLProbModel.PNG")
+```
+
+Both models showed to perform well within this threshold, but the logistic regression model performed better, and as a result I suggest continuing with this model if more data becomes available. Moreover, if the Seahawks would like to further develop a more precise model, I would recommend exploring adding features such as head to head matchup between them and opponents, defensive and offensive rankings, and in game averages as possible features to improve the accuracy of the model. Finally, I made the last recommendation for the model to be used as a preparation tactic for the week leading up to a game, as this would be helpful as a tool for coach Carroll to better understand possible outcomes from play decisions in game.
+
+## Data and Code
+
+The following R files can be run in order to obtain, clean, prepare data and then train the models.
+
+- 001-data-preparation.R
+- 002-model-preparation.R
+
+
+
+
